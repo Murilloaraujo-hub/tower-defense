@@ -1,4 +1,0 @@
-import {loadSettings} from './save.js';
-let ctx=null;function ensure(){if(!ctx)ctx=new (window.AudioContext||window.webkitAudioContext)();return ctx}
-export function tone(freq=440,duration=.06,type='sine',gain=.03){const s=loadSettings();if(!s.sfx||s.master<=0)return;const c=ensure(),o=c.createOscillator(),g=c.createGain();o.type=type;o.frequency.value=freq;g.gain.value=gain*(s.sfx/100)*(s.master/100);o.connect(g);g.connect(c.destination);o.start();g.gain.exponentialRampToValueAtTime(.0001,c.currentTime+duration);o.stop(c.currentTime+duration)}
-export const sounds={shoot:()=>tone(520,.04,'triangle',.015),hit:()=>tone(170,.04,'square',.012),upgrade:()=>{tone(660,.08,'sine',.03);setTimeout(()=>tone(880,.1,'sine',.025),70)},button:()=>tone(420,.04,'sine',.02),win:()=>{tone(523,.12);setTimeout(()=>tone(659,.12),120);setTimeout(()=>tone(784,.2),240)},lose:()=>{tone(260,.14,'sawtooth',.025);setTimeout(()=>tone(180,.28,'sawtooth',.02),130)}};
