@@ -1,0 +1,1 @@
+export function pointerToCanvas(canvas,event){const r=canvas.getBoundingClientRect();const p=event.touches?.[0]||event.changedTouches?.[0]||event;return{x:(p.clientX-r.left)/r.width*canvas.width,y:(p.clientY-r.top)/r.height*canvas.height}}
