@@ -1,0 +1,2 @@
+.hero-panel::after{pointer-events:none}
+.hero-panel>*{position:relative;z-index:1}
