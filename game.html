@@ -13,20 +13,32 @@
 <body class="game-body">
   <div class="game-app">
     <header class="battle-hud glass">
-      <a href="./index.html" class="icon-btn hud-back" aria-label="Menu">←</a>
-      <div class="hud-stat"><span>❤</span><b id="livesHud">100</b></div>
-      <div class="hud-stat"><span>◇</span><b id="moneyHud">650</b></div>
-      <div class="hud-stat wave"><span>Rodada</span><b><span id="waveHud">0</span>/<span id="waveMaxHud">100</span></b></div>
+      <a href="./index.html" class="icon-btn hud-back" aria-label="Voltar ao menu" title="Menu">←</a>
+      <div class="hud-stat vital"><span aria-hidden="true">❤</span><div><small>Integridade</small><b id="livesHud">100</b></div></div>
+      <div class="hud-stat wealth"><span aria-hidden="true">◇</span><div><small>Recursos</small><b id="moneyHud">650</b></div></div>
+      <div class="hud-stat wave"><span>Rodada</span><b><span id="waveHud">0</span><i>/</i><span id="waveMaxHud">100</span></b></div>
       <div class="hud-spacer"></div>
-      <button class="hud-button" id="pauseBtn">Ⅱ</button>
-      <button class="hud-button" id="speedBtn">1×</button>
-      <button class="hud-button auto" id="autoBtn">Auto: off</button>
-      <button class="primary-btn hud-start" id="startWaveBtn">Iniciar</button>
+      <button class="hud-button" id="pauseBtn" aria-label="Pausar batalha" title="Pausar">Ⅱ</button>
+      <button class="hud-button" id="speedBtn" aria-label="Velocidade da batalha" title="Velocidade">1×</button>
+      <button class="hud-button auto" id="autoBtn" title="Iniciar rodadas automaticamente">Auto: off</button>
+      <button class="primary-btn hud-start" id="startWaveBtn">Iniciar rodada</button>
     </header>
 
     <main class="battle-layout">
-      <section class="canvas-stage" id="canvasStage">
+      <section class="canvas-stage" id="canvasStage" aria-label="Campo de batalha">
         <canvas id="gameCanvas" width="1280" height="720"></canvas>
+        <div class="battle-intel" aria-live="polite">
+          <div class="intel-card threat-card">
+            <div class="intel-label"><span>AMEAÇA DA RODADA</span><b id="waveThreatText">Aguardando</b></div>
+            <div class="wave-progress"><div id="waveProgressFill"></div></div>
+            <div class="intel-meta"><span><b id="enemiesAlive">0</b> hostis em campo</span><span><b id="enemiesRemaining">0</b> pendentes</span></div>
+          </div>
+          <div class="intel-stack">
+            <div class="intel-chip"><span>✦</span><b id="killsHud">0</b><small>eliminações</small></div>
+            <div class="intel-chip"><span>ϟ</span><b id="dpsHud">0</b><small>dano/s</small></div>
+          </div>
+        </div>
+        <div class="battle-hint" id="battleHint">Escolha um guardião para iniciar a defesa.</div>
         <div id="toastLayer" class="toast-layer"></div>
         <div id="tutorialBox" class="tutorial-box glass hidden">
           <span class="eyebrow">TUTORIAL</span>
@@ -34,17 +46,17 @@
           <div><button class="secondary-btn" id="skipTutorial">Pular</button><button class="primary-btn" id="nextTutorial">Continuar</button></div>
         </div>
         <div id="resultOverlay" class="result-overlay hidden">
-          <div class="result-card glass"><span class="result-icon" id="resultIcon">✦</span><h2 id="resultTitle">Vitória</h2><p id="resultSummary"></p><div class="result-stats" id="resultStats"></div><div class="result-actions"><button class="secondary-btn" id="retryBtn">Tentar novamente</button><a class="primary-btn link-btn" href="./index.html">Menu principal</a></div></div>
+          <div class="result-card glass"><span class="result-icon" id="resultIcon">✦</span><span class="eyebrow" id="resultEyebrow">RELATÓRIO DA EXPEDIÇÃO</span><h2 id="resultTitle">Vitória</h2><p id="resultSummary"></p><div class="result-highlight" id="resultHighlight"></div><div class="result-stats" id="resultStats"></div><div class="result-actions"><button class="secondary-btn" id="retryBtn">Tentar novamente</button><a class="primary-btn link-btn" href="./index.html">Menu principal</a></div></div>
         </div>
       </section>
 
       <aside class="tower-panel glass" id="towerPanel">
-        <div class="empty-selection" id="emptySelection"><div class="orb">✦</div><b>Selecione um guardião</b><p>Clique em uma unidade posicionada para ver atributos, prioridade, upgrades e habilidade.</p></div>
+        <div class="empty-selection" id="emptySelection"><div class="orb">✦</div><span class="eyebrow">CENTRAL DE COMANDO</span><b>Selecione um guardião</b><p>Clique em uma unidade posicionada para acompanhar desempenho, definir prioridade, comprar upgrades e ativar sua habilidade.</p><div class="selection-tip"><span>⌁</span> O alcance aparece ao selecionar</div></div>
         <div id="towerDetails" class="hidden"></div>
       </aside>
     </main>
 
-    <footer class="hero-dock glass" id="heroDock"></footer>
+    <footer class="hero-dock glass" id="heroDock" aria-label="Guardiões disponíveis"></footer>
   </div>
   <script type="module" src="./js/game.js"></script>
 </body>

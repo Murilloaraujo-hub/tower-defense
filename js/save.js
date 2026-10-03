@@ -1,9 +1,9 @@
 import {evaluateAchievements} from './achievements.js';
 const KEY='astralBastionSave';
 const SETTINGS='astralBastionSettings';
-export function defaultSave(){return{level:1,xp:0,coins:700,achievements:[],unlockedHeroes:['kael','lyra','nix','morva'],unlockedMaps:['meadow'],equippedHeroes:['kael','lyra','nix','morva'],equipment:['sunblade','focusring'],equippedEquipment:{kael:['sunblade'],lyra:['focusring']},allies:[],equippedAlly:null,tutorialDone:false,profileName:'Guardião',stats:{kills:0,gamesPlayed:0,wins:0,losses:0,bestWave:0,moneySpent:0,towersPlaced:0,abilitiesUsed:0,bossesDefeated:0,perfectWins:0}}}
+export function defaultSave(){return{level:1,xp:0,coins:700,achievements:[],unlockedHeroes:['kael','lyra','nix','morva'],unlockedMaps:['meadow'],equippedHeroes:['kael','lyra','nix','morva'],equipment:['sunblade','focusring'],equippedEquipment:{kael:['sunblade'],lyra:['focusring']},allies:[],equippedAlly:null,tutorialDone:false,profileName:'Guardião',battleHistory:[],stats:{kills:0,gamesPlayed:0,wins:0,losses:0,bestWave:0,moneySpent:0,towersPlaced:0,abilitiesUsed:0,bossesDefeated:0,perfectWins:0,damageDealt:0,timePlayed:0,totalWaves:0,coinsEarned:0,bestKills:0}}}
 export function defaultSettings(){return{master:80,music:45,sfx:75,particles:true,damageNumbers:true,quality:'high',autoStart:false}}
-export function loadSave(){try{return{...defaultSave(),...JSON.parse(localStorage.getItem(KEY)||'{}'),stats:{...defaultSave().stats,...(JSON.parse(localStorage.getItem(KEY)||'{}').stats||{})}}}catch{return defaultSave()}}
+export function loadSave(){try{const raw=JSON.parse(localStorage.getItem(KEY)||'{}');const defaults=defaultSave();return{...defaults,...raw,battleHistory:Array.isArray(raw.battleHistory)?raw.battleHistory:[],stats:{...defaults.stats,...(raw.stats||{})}}}catch{return defaultSave()}}
 export function saveGame(data){evaluateAchievements(data);localStorage.setItem(KEY,JSON.stringify(data))}
 export function loadSettings(){try{return{...defaultSettings(),...JSON.parse(localStorage.getItem(SETTINGS)||'{}')}}catch{return defaultSettings()}}
 export function saveSettings(data){localStorage.setItem(SETTINGS,JSON.stringify(data))}

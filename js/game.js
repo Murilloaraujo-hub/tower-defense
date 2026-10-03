@@ -1,4 +1,4 @@
-import {HEROES,getHero} from './heroes.js';
+import {getHero} from './heroes.js';
 import {getMap} from './maps.js';
 import {makePath,createEnemy,updateEnemy,distanceToPath,damageEnemy,applyStatus} from './engine.js';
 import {createProjectile,updateProjectile} from './projectiles.js';
@@ -13,55 +13,570 @@ import {sounds} from './audio.js';
 import {ITEMS,getItem} from './items.js';
 import {toast,fmt} from './ui.js';
 
-const canvas=document.getElementById('gameCanvas'),ctx=canvas.getContext('2d');
-const params=new URLSearchParams(location.search),map=getMap(params.get('map')),difficultyKey=params.get('difficulty')||'normal',mode=params.get('mode')||'normal',diff={...DIFFICULTIES[difficultyKey]};
+const canvas=document.getElementById('gameCanvas');
+const ctx=canvas.getContext('2d');
+const params=new URLSearchParams(location.search);
+const map=getMap(params.get('map'));
+const difficultyKey=params.get('difficulty')||'normal';
+const mode=params.get('mode')||'normal';
+const diff={...DIFFICULTIES[difficultyKey]};
 if(mode==='challenge')diff.speed*=1.15;
-let save=loadSave(),settings=loadSettings();
-const state={map,path:makePath(map),enemies:[],towers:[],projectiles:[],particles:[],placement:null,selectedTower:null,wave:0,maxWave:mode==='endless'?Infinity:100,money:diff.money,lives:diff.lives,initialLives:diff.lives,waveActive:false,spawning:false,paused:false,speed:1,auto:settings.autoStart||false,gameOver:false,kills:0,runSpent:0,runPlaced:0,runAbilities:0,bossKills:0,startTime:performance.now(),spawnBurst,damageNumbers:[],allyId:save.equippedAlly};
-let last=performance.now(),spawnQueue=[],spawnTimer=0,selectedHeroId=null,tutorialStep=0,allyTimer=0;
+let save=loadSave();
+let settings=loadSettings();
+const state={
+  map,path:makePath(map),enemies:[],towers:[],projectiles:[],particles:[],placement:null,selectedTower:null,
+  wave:0,maxWave:mode==='endless'?Infinity:100,money:diff.money,lives:diff.lives,initialLives:diff.lives,
+  waveActive:false,spawning:false,paused:false,speed:1,auto:settings.autoStart||false,gameOver:false,
+  kills:0,runSpent:0,runPlaced:0,runAbilities:0,bossKills:0,runDamage:0,runEarned:0,runEscaped:0,
+  waveTotal:0,waveSpawned:0,startTime:performance.now(),spawnBurst,damageNumbers:[],damageEvents:[],liveDps:0,
+  quality:settings.quality,allyId:save.equippedAlly,recordDamage
+};
+let last=performance.now();
+let spawnQueue=[];
+let spawnTimer=0;
+let selectedHeroId=null;
+let tutorialStep=0;
+let allyTimer=0;
+let panelLastRendered=0;
 const heroPool=save.equippedHeroes.filter(id=>save.unlockedHeroes.includes(id)).slice(0,mode==='challenge'?3:4);
 
 function init(){
   document.getElementById('waveMaxHud').textContent=state.maxWave===Infinity?'∞':state.maxWave;
   document.getElementById('autoBtn').textContent=`Auto: ${state.auto?'on':'off'}`;
-  renderDock();updateHud();bind();if(!save.tutorialDone)showTutorial();requestAnimationFrame(loop);
+  renderDock();
+  updateHud(true);
+  bind();
+  if(!save.tutorialDone)showTutorial();
+  requestAnimationFrame(loop);
 }
+
 function bind(){
   document.getElementById('startWaveBtn').onclick=startWave;
-  document.getElementById('pauseBtn').onclick=()=>{state.paused=!state.paused;document.getElementById('pauseBtn').classList.toggle('active',state.paused)};
-  document.getElementById('speedBtn').onclick=()=>{state.speed=state.speed===1?2:state.speed===2?3:1;document.getElementById('speedBtn').textContent=`${state.speed}×`};
-  document.getElementById('autoBtn').onclick=()=>{state.auto=!state.auto;settings.autoStart=state.auto;saveSettings(settings);document.getElementById('autoBtn').textContent=`Auto: ${state.auto?'on':'off'}`};
-  canvas.addEventListener('pointermove',e=>{if(!selectedHeroId)return;const p=pointerToCanvas(canvas,e);updatePlacement(p.x,p.y)});
-  canvas.addEventListener('pointerdown',e=>{const p=pointerToCanvas(canvas,e);if(selectedHeroId){updatePlacement(p.x,p.y);placeTower();return}const t=findTower(p.x,p.y);selectTower(t)});
+  document.getElementById('pauseBtn').onclick=togglePause;
+  document.getElementById('speedBtn').onclick=()=>{
+    state.speed=state.speed===1?2:state.speed===2?3:1;
+    document.getElementById('speedBtn').textContent=`${state.speed}×`;
+    showBattleHint(`Velocidade da batalha: ${state.speed}×`);
+  };
+  document.getElementById('autoBtn').onclick=()=>{
+    state.auto=!state.auto;
+    settings.autoStart=state.auto;
+    saveSettings(settings);
+    document.getElementById('autoBtn').textContent=`Auto: ${state.auto?'on':'off'}`;
+    showBattleHint(state.auto?'Rodadas serão iniciadas automaticamente.':'Início automático desativado.');
+  };
+  canvas.addEventListener('pointermove',e=>{
+    if(!selectedHeroId)return;
+    const p=pointerToCanvas(canvas,e);
+    updatePlacement(p.x,p.y);
+  });
+  canvas.addEventListener('pointerdown',e=>{
+    const p=pointerToCanvas(canvas,e);
+    if(selectedHeroId){
+      updatePlacement(p.x,p.y);
+      placeTower();
+      return;
+    }
+    const t=findTower(p.x,p.y);
+    selectTower(t);
+  });
   document.getElementById('retryBtn').onclick=()=>location.reload();
   document.getElementById('skipTutorial').onclick=endTutorial;
   document.getElementById('nextTutorial').onclick=nextTutorial;
-  addEventListener('keydown',e=>{if(e.key==='Escape'){selectedHeroId=null;state.placement=null;selectTower(null)}if(e.code==='Space'){e.preventDefault();state.paused=!state.paused}})
+  addEventListener('keydown',e=>{
+    if(e.key==='Escape'){
+      selectedHeroId=null;
+      state.placement=null;
+      document.querySelectorAll('.hero-card').forEach(c=>c.classList.remove('selected'));
+      selectTower(null);
+      showBattleHint('Posicionamento cancelado.');
+    }
+    if(e.code==='Space'){
+      e.preventDefault();
+      togglePause();
+    }
+  });
 }
-function renderDock(){const dock=document.getElementById('heroDock');dock.innerHTML=heroPool.map(id=>{const h=getHero(id);return `<button class="hero-card" data-hero="${h.id}"><div class="hero-color" style="background:${h.color}"></div><b>${h.name}</b><small>${h.role}</small><span class="cost">◇ ${h.cost}</span></button>`}).join('');dock.onclick=e=>{const c=e.target.closest('[data-hero]');if(!c)return;const h=getHero(c.dataset.hero);if(selectedHeroId===h.id){selectedHeroId=null;state.placement=null;c.classList.remove('selected');toast('Posicionamento cancelado');return}if(state.money<h.cost){toast('Moedas insuficientes');return}selectedHeroId=h.id;selectTower(null);[...dock.children].forEach(x=>x.classList.toggle('selected',x===c));const p=state.path.pts[0];state.placement={x:p.x+80,y:p.y-120,hero:h,valid:false};sounds.button()}}
-function updatePlacement(x,y){const h=getHero(selectedHeroId);if(!h)return;const valid=distanceToPath(state.path,x,y)>48&&!map.blocked.some(b=>Math.hypot(x-b.x*1280,y-b.y*720)<b.r*720+24)&&state.towers.every(t=>Math.hypot(x-t.x,y-t.y)>46)&&x>24&&x<1256&&y>24&&y<696;state.placement={x,y,hero:h,valid}}
-function placeTower(){const p=state.placement;if(!p||!p.valid)return;const h=p.hero;if(state.money<h.cost){toast('Moedas insuficientes');return}const tower={...h,ability:{...h.ability},x:p.x,y:p.y,baseDamage:h.damage,baseRange:h.range,baseAttackSpeed:h.attackSpeed,cooldown:0,spent:h.cost,priority:'first',upgrades:createUpgradeState(),level:1,abilityReady:0,multishot:1,canSeeInvisible:h.id==='nix'||h.id==='lyra'};for(const itemId of (save.equippedEquipment?.[h.id]||[])){const item=getItem(itemId);if(!item)continue;if(item.bonus.damage)tower.damage*=item.bonus.damage;if(item.bonus.range)tower.range*=item.bonus.range;if(item.bonus.pierce)tower.pierce+=item.bonus.pierce;if(item.bonus.attackSpeed)tower.attackSpeed*=item.bonus.attackSpeed;if(item.bonus.abilityCooldown)tower.ability.cooldown*=item.bonus.abilityCooldown}if(save.equippedAlly==='mender')tower.range*=1.05;if(save.equippedAlly==='bot')tower.attackSpeed*=.95;state.towers.push(tower);state.money-=h.cost;state.runSpent+=h.cost;state.runPlaced++;save.stats.towersPlaced++;save.stats.moneySpent+=h.cost;selectedHeroId=null;state.placement=null;document.querySelectorAll('.hero-card').forEach(c=>c.classList.remove('selected'));selectTower(tower);sounds.upgrade();updateHud();if(tutorialStep===1)nextTutorial()}
+
+function togglePause(){
+  if(state.gameOver)return;
+  state.paused=!state.paused;
+  const btn=document.getElementById('pauseBtn');
+  btn.classList.toggle('active',state.paused);
+  btn.textContent=state.paused?'▶':'Ⅱ';
+  btn.setAttribute('aria-label',state.paused?'Retomar batalha':'Pausar batalha');
+  showBattleHint(state.paused?'Batalha pausada.':'Batalha retomada.');
+}
+
+function renderDock(){
+  const dock=document.getElementById('heroDock');
+  const roleIcon={Combatente:'✦',Atiradora:'➶',Controlador:'❄',Invocadora:'◈',Inventor:'⚙',Duelista:'✧',Brutamonte:'⬟',Suporte:'♪'};
+  dock.innerHTML=heroPool.map(id=>{
+    const h=getHero(id);
+    return `<button class="hero-card" data-hero="${h.id}" aria-pressed="false"><div class="hero-color" style="background:${h.color}"></div><span class="hero-sigil" style="color:${h.color}">${roleIcon[h.role]||'✦'}</span><b>${h.name}</b><small>${h.role}</small><span class="cost">◇ ${h.cost}</span></button>`;
+  }).join('');
+  dock.onclick=e=>{
+    const c=e.target.closest('[data-hero]');
+    if(!c)return;
+    const h=getHero(c.dataset.hero);
+    if(selectedHeroId===h.id){
+      selectedHeroId=null;
+      state.placement=null;
+      c.classList.remove('selected');
+      c.setAttribute('aria-pressed','false');
+      showBattleHint('Posicionamento cancelado.');
+      toast('Posicionamento cancelado');
+      return;
+    }
+    if(state.money<h.cost){
+      toast('Moedas insuficientes');
+      showBattleHint(`São necessários ◇ ${h.cost} para convocar ${h.name.split(',')[0]}.`);
+      return;
+    }
+    selectedHeroId=h.id;
+    selectTower(null);
+    [...dock.children].forEach(x=>{
+      const active=x===c;
+      x.classList.toggle('selected',active);
+      x.setAttribute('aria-pressed',String(active));
+    });
+    const p=state.path.pts[0];
+    state.placement={x:p.x+80,y:p.y-120,hero:h,valid:false};
+    showBattleHint(`Posicione ${h.name.split(',')[0]} fora da estrada. O círculo verde indica uma posição válida.`);
+    sounds.button();
+  };
+}
+
+function updatePlacement(x,y){
+  const h=getHero(selectedHeroId);
+  if(!h)return;
+  const valid=distanceToPath(state.path,x,y)>48&&!map.blocked.some(b=>Math.hypot(x-b.x*1280,y-b.y*720)<b.r*720+24)&&state.towers.every(t=>Math.hypot(x-t.x,y-t.y)>46)&&x>24&&x<1256&&y>24&&y<696;
+  state.placement={x,y,hero:h,valid};
+}
+
+function placeTower(){
+  const p=state.placement;
+  if(!p||!p.valid)return;
+  const h=p.hero;
+  if(state.money<h.cost){
+    toast('Moedas insuficientes');
+    return;
+  }
+  const tower={...h,ability:{...h.ability},x:p.x,y:p.y,baseDamage:h.damage,baseRange:h.range,baseAttackSpeed:h.attackSpeed,cooldown:0,spent:h.cost,priority:'first',upgrades:createUpgradeState(),level:1,abilityReady:0,multishot:1,canSeeInvisible:h.id==='nix'||h.id==='lyra',damageDealt:0,kills:0,shots:0};
+  for(const itemId of (save.equippedEquipment?.[h.id]||[])){
+    const item=getItem(itemId);
+    if(!item)continue;
+    if(item.bonus.damage)tower.damage*=item.bonus.damage;
+    if(item.bonus.range)tower.range*=item.bonus.range;
+    if(item.bonus.pierce)tower.pierce+=item.bonus.pierce;
+    if(item.bonus.attackSpeed)tower.attackSpeed*=item.bonus.attackSpeed;
+    if(item.bonus.abilityCooldown)tower.ability.cooldown*=item.bonus.abilityCooldown;
+  }
+  if(save.equippedAlly==='mender')tower.range*=1.05;
+  if(save.equippedAlly==='bot')tower.attackSpeed*=.95;
+  state.towers.push(tower);
+  state.money-=h.cost;
+  state.runSpent+=h.cost;
+  state.runPlaced++;
+  save.stats.towersPlaced++;
+  save.stats.moneySpent+=h.cost;
+  selectedHeroId=null;
+  state.placement=null;
+  document.querySelectorAll('.hero-card').forEach(c=>{
+    c.classList.remove('selected');
+    c.setAttribute('aria-pressed','false');
+  });
+  selectTower(tower);
+  sounds.upgrade();
+  showBattleHint(`${h.name.split(',')[0]} está em posição. Selecione a rodada quando estiver pronto.`);
+  updateHud(true);
+  if(tutorialStep===1)nextTutorial();
+}
+
 function findTower(x,y){return state.towers.find(t=>Math.hypot(x-t.x,y-t.y)<28)||null}
-function selectTower(t){state.selectedTower=t;const panel=document.getElementById('towerPanel');panel.classList.toggle('mobile-open',!!t);renderTowerPanel()}
-function renderTowerPanel(){const empty=document.getElementById('emptySelection'),detail=document.getElementById('towerDetails'),t=state.selectedTower;if(!t){empty.classList.remove('hidden');detail.classList.add('hidden');return}empty.classList.add('hidden');detail.classList.remove('hidden');const now=performance.now();detail.innerHTML=`<div class="tower-head"><div><span class="eyebrow">${t.role}</span><h2>${t.name}</h2></div><span class="tower-level">Nível ${t.level}</span></div><div class="stat-list"><div class="stat-box"><span>Dano</span><b>${t.damage.toFixed(1)}</b></div><div class="stat-box"><span>Alcance</span><b>${Math.round(t.range)}</b></div><div class="stat-box"><span>Cadência</span><b>${t.attackSpeed.toFixed(2)}s</b></div><div class="stat-box"><span>Perfuração</span><b>${t.pierce}</b></div></div><div class="priority-row"><label>Prioridade</label><select id="prioritySelect"><option value="first">Primeiro</option><option value="last">Último</option><option value="strong">Mais forte</option><option value="weak">Mais fraco</option><option value="near">Mais próximo</option></select></div>${['A','B','C'].map(path=>upgradeHtml(t,path)).join('')}<button class="ability-btn" id="abilityBtn" ${t.level<4||now<t.abilityReady?'disabled':''}>${t.level<4?`Habilidade no nível 4`:now<t.abilityReady?`${t.ability.name} · ${Math.ceil((t.abilityReady-now)/1000)}s`:t.ability.name}</button><button class="sell-btn" id="sellBtn">Vender por ◇ ${sellValue(t)}</button>`;document.getElementById('prioritySelect').value=t.priority;document.getElementById('prioritySelect').onchange=e=>t.priority=e.target.value;document.querySelectorAll('[data-upgrade]').forEach(b=>b.onclick=()=>buyUpgrade(b.dataset.upgrade));document.getElementById('abilityBtn').onclick=()=>{if(useAbility(t,state)){sounds.upgrade();renderTowerPanel()}};document.getElementById('sellBtn').onclick=()=>sellTower(t)}
-function upgradeHtml(t,path){const lvl=t.upgrades[path],u=getUpgrade(path,lvl);return `<div class="upgrade-path"><div class="up-head"><div><b>${pathName(path)}</b><br><small>Nível ${lvl}/5${u?` · ${u.name}`:' · Máximo'}</small></div>${u?`<b>◇ ${u.cost}</b>`:''}</div>${u?`<button data-upgrade="${path}" ${state.money<u.cost?'disabled':''}>Comprar upgrade</button>`:'<button disabled>Máximo</button>'}</div>`}
-function buyUpgrade(path){const t=state.selectedTower,u=getUpgrade(path,t.upgrades[path]);if(!u||state.money<u.cost)return;state.money-=u.cost;state.runSpent+=u.cost;save.stats.moneySpent+=u.cost;t.spent+=u.cost;u.apply(t);t.upgrades[path]++;t.level=1+t.upgrades.A+t.upgrades.B+t.upgrades.C;sounds.upgrade();spawnBurst(t.x,t.y,t.color,18);updateHud();renderTowerPanel();if(tutorialStep===3)nextTutorial()}
-function sellTower(t){const gain=sellValue(t);state.money+=gain;state.towers=state.towers.filter(x=>x!==t);selectTower(null);updateHud();sounds.button()}
-function targetFor(t){const now=performance.now();const range=t.range*((t.colossalUntil||0)>now?2:1);const list=state.enemies.filter(e=>!e.dead&&Math.hypot(e.x-t.x,e.y-t.y)<=range&&(t.canSeeInvisible||!e.invisible));if(!list.length)return null;if(t.priority==='last')return list.reduce((a,b)=>a.progress<b.progress?a:b);if(t.priority==='strong')return list.reduce((a,b)=>a.hp>b.hp?a:b);if(t.priority==='weak')return list.reduce((a,b)=>a.hp<b.hp?a:b);if(t.priority==='near')return list.reduce((a,b)=>Math.hypot(a.x-t.x,a.y-t.y)<Math.hypot(b.x-t.x,b.y-t.y)?a:b);return list.reduce((a,b)=>a.progress>b.progress?a:b)}
-function towerUpdate(t,dt){const now=performance.now();t.cooldown-=dt;const speedBuff=(t.overchargeUntil||0)>now?.48:1;const songBuff=(t.songUntil||0)>now?.75:1;const colossal=(t.colossalUntil||0)>now?2:1;if(t.cooldown<=0){const target=targetFor(t);if(target){const shots=t.multishot||1;for(let i=0;i<shots;i++)state.projectiles.push(createProjectile({...t,damage:t.damage*colossal},target,(i-(shots-1)/2)*.06));t.cooldown=t.attackSpeed*speedBuff*songBuff;sounds.shoot()}}}
-function startWave(){if(state.waveActive||state.gameOver)return;if(state.maxWave!==Infinity&&state.wave>=state.maxWave)return;state.wave++;state.waveActive=true;state.spawning=true;spawnQueue=[];for(const group of getWave(state.wave))for(let i=0;i<group.count;i++)spawnQueue.push({type:group.type,delay:group.interval});spawnTimer=0;document.getElementById('startWaveBtn').disabled=true;updateHud();if(tutorialStep===2)nextTutorial()}
-function spawnUpdate(dt){if(!state.spawning)return;spawnTimer-=dt;if(spawnTimer<=0&&spawnQueue.length){const next=spawnQueue.shift();state.enemies.push(createEnemy(next.type,state.wave,state.path,diff));spawnTimer=next.delay}if(!spawnQueue.length)state.spawning=false}
-function finishWave(){state.waveActive=false;state.money+=waveBonus(state.wave);document.getElementById('startWaveBtn').disabled=false;toast(`Rodada ${state.wave} concluída · +◇ ${waveBonus(state.wave)}`);if(state.maxWave!==Infinity&&state.wave>=state.maxWave){finishGame(true);return}if(state.auto)setTimeout(()=>!state.gameOver&&startWave(),450)}
-function finishGame(win){if(state.gameOver)return;state.gameOver=true;state.paused=true;save.stats.gamesPlayed++;save.stats.bestWave=Math.max(save.stats.bestWave,state.wave);save.stats.kills+=state.kills;save.stats.abilitiesUsed+=state.runAbilities;save.stats.bossesDefeated+=state.bossKills;if(win){save.stats.wins++;if(state.lives===state.initialLives)save.stats.perfectWins++}else save.stats.losses++;const xp=Math.floor((state.wave*7+state.kills*.45)*(win?1.25:1));const coins=Math.floor((state.wave*4+state.kills*.12)*diff.reward);let itemDrop=null;const missing=ITEMS.filter(i=>!save.equipment.includes(i.id));if(state.wave>=20&&missing.length&&Math.random()<.35){itemDrop=missing[Math.floor(Math.random()*missing.length)];save.equipment.push(itemDrop.id)}const beforeAchievements=new Set(save.achievements);grantProgress(save,xp,coins);const unlockedNow=save.achievements.filter(id=>!beforeAchievements.has(id));const elapsed=Math.floor((performance.now()-state.startTime)/1000);const minutes=Math.floor(elapsed/60),seconds=String(elapsed%60).padStart(2,'0');const overlay=document.getElementById('resultOverlay');document.getElementById('resultIcon').textContent=win?'✦':'◇';document.getElementById('resultTitle').textContent=win?'Vitória':'Bastião rompido';document.getElementById('resultSummary').textContent=(win?'A rota do Véu foi estabilizada.':'A expedição terminou, mas o progresso permanente foi preservado.')+(itemDrop?` Novo item: ${itemDrop.name}.`:'');document.getElementById('resultStats').innerHTML=`<div><span>Rodada</span><b>${state.wave}</b></div><div><span>Eliminações</span><b>${fmt(state.kills)}</b></div><div><span>XP recebido</span><b>${fmt(xp)}</b></div><div><span>Moedas recebidas</span><b>${fmt(coins)}</b></div><div><span>Tempo</span><b>${minutes}:${seconds}</b></div><div><span>Conquistas</span><b>+${unlockedNow.length}</b></div>`;overlay.classList.remove('hidden');win?sounds.win():sounds.lose()}
-function cleanupAndRewards(){const children=[];for(const e of state.enemies){if(e.dead&&!e.counted){e.counted=true;state.kills++;state.money+=e.reward;if(e.boss)state.bossKills++;spawnBurst(e.x,e.y,e.color,e.boss?28:8);const layer={titan:['champion','champion'],champion:['brute','brute'],golem:['swarm','swarm']}[e.type]||[];for(const type of layer){const child=createEnemy(type,state.wave,state.path,diff);child.distance=e.distance;child.progress=e.progress;child.x=e.x;child.y=e.y;children.push(child)}}}state.enemies=state.enemies.filter(e=>!e.dead&&!e.escaped);state.enemies.push(...children)}
-function spawnBurst(x,y,color,count){if(!settings.particles)return;const max=settings.quality==='low'?Math.ceil(count*.35):settings.quality==='medium'?Math.ceil(count*.65):count;for(let i=0;i<max;i++){const life=.25+Math.random()*.45;state.particles.push({x,y,vx:(Math.random()-.5)*180,vy:(Math.random()-.5)*180,size:2+Math.random()*4,color,life,maxLife:life})}}
-function particlesUpdate(dt){for(const p of state.particles){p.x+=p.vx*dt;p.y+=p.vy*dt;p.vx*=.96;p.vy*=.96;p.life-=dt}state.particles=state.particles.filter(p=>p.life>0)}
-function allyUpdate(dt){if(!save.equippedAlly||!state.enemies.length)return;allyTimer-=dt;if(allyTimer>0)return;const target=[...state.enemies].filter(e=>!e.dead).sort((a,b)=>b.progress-a.progress)[0];if(!target)return;if(save.equippedAlly==='drake'){damageEnemy(target,10+state.wave*.35);allyTimer=1.8}else if(save.equippedAlly==='spirit'){damageEnemy(target,5+state.wave*.18);applyStatus(target,{type:'slow',amount:.35,duration:2});allyTimer=2.4}else if(save.equippedAlly==='scout'){damageEnemy(target,8+state.wave*.28);allyTimer=1.25}else{allyTimer=2.5}if(save.equippedAlly!=='mender'&&save.equippedAlly!=='bot')spawnBurst(target.x,target.y,'#d9f4ff',5)}
-function update(dt){spawnUpdate(dt);const bossAura=state.enemies.some(e=>e.boss&&!e.dead)?1.12:1;for(const e of state.enemies){updateEnemy(e,dt*(e.boss?1:bossAura),state.path,performance.now());if(e.distance>=state.path.total&&!e.dead){e.escaped=true;state.lives-=e.lives;if(state.lives<=0){state.lives=0;finishGame(false)}}}for(const t of state.towers)towerUpdate(t,dt);allyUpdate(dt);for(const p of state.projectiles)updateProjectile(p,dt,state.enemies,(enemy,dealt)=>{sounds.hit();if(settings.damageNumbers){const life=.65;state.damageNumbers.push({x:enemy.x,y:enemy.y-12,value:dealt,life,maxLife:life,color:'#ffffff'})}});state.projectiles=state.projectiles.filter(p=>!p.dead);cleanupAndRewards();particlesUpdate(dt);for(const d of state.damageNumbers){d.y-=24*dt;d.life-=dt}state.damageNumbers=state.damageNumbers.filter(d=>d.life>0);if(state.waveActive&&!state.spawning&&!state.enemies.length)finishWave();updateHud()}
-function updateHud(){document.getElementById('livesHud').textContent=fmt(state.lives);document.getElementById('moneyHud').textContent=fmt(state.money);document.getElementById('waveHud').textContent=state.wave;if(state.selectedTower)renderTowerPanel()}
-function loop(now){const raw=Math.min(.05,(now-last)/1000);last=now;if(!state.paused&&!state.gameOver)update(raw*state.speed);renderGame(ctx,state);requestAnimationFrame(loop)}
-function showTutorial(){const box=document.getElementById('tutorialBox');box.classList.remove('hidden');tutorialStep=0;setTutorialText()}
-function setTutorialText(){const texts=['Escolha um guardião na barra inferior. Cada unidade possui custo, alcance e função próprios.','Posicione o guardião fora da estrada. O círculo fica verde em uma posição válida.','Inicie a primeira rodada pelo botão no topo.','Selecione um guardião colocado e compre um upgrade real de um dos três caminhos.','No painel do guardião, altere a prioridade de alvo entre Primeiro, Último, Mais forte, Mais fraco e Mais próximo.','Ao alcançar nível 4 durante a partida, use a habilidade especial do guardião quando estiver pronta.'];document.getElementById('tutorialText').textContent=texts[tutorialStep]||''}
-function nextTutorial(){tutorialStep++;if(tutorialStep>=6){endTutorial();return}setTutorialText()}
-function endTutorial(){save.tutorialDone=true;saveGame(save);document.getElementById('tutorialBox').classList.add('hidden')}
+
+function selectTower(t){
+  state.selectedTower=t;
+  const panel=document.getElementById('towerPanel');
+  panel.classList.toggle('mobile-open',!!t);
+  renderTowerPanel();
+  if(t)showBattleHint(`${t.name.split(',')[0]} selecionado. Ajuste a prioridade ou fortaleça seus caminhos.`);
+}
+
+function renderTowerPanel(){
+  panelLastRendered=performance.now();
+  const empty=document.getElementById('emptySelection');
+  const detail=document.getElementById('towerDetails');
+  const t=state.selectedTower;
+  if(!t){
+    empty.classList.remove('hidden');
+    detail.classList.add('hidden');
+    return;
+  }
+  empty.classList.add('hidden');
+  detail.classList.remove('hidden');
+  const now=performance.now();
+  const abilityLabel=t.level<4?'Habilidade no nível 4':now<t.abilityReady?`${t.ability.name} · ${Math.ceil((t.abilityReady-now)/1000)}s`:t.ability.name;
+  detail.innerHTML=`<div class="tower-head"><div><span class="eyebrow">${t.role}</span><h2>${t.name}</h2></div><span class="tower-level">Nível ${t.level}</span></div>
+    <div class="stat-list"><div class="stat-box"><span>Dano</span><b>${t.damage.toFixed(1)}</b></div><div class="stat-box"><span>Alcance</span><b>${Math.round(t.range)}</b></div><div class="stat-box"><span>Cadência</span><b>${t.attackSpeed.toFixed(2)}s</b></div><div class="stat-box"><span>Perfuração</span><b>${t.pierce}</b></div></div>
+    <div class="performance-strip"><div><span>Dano causado</span><b>${fmt(Math.floor(t.damageDealt||0))}</b></div><div><span>Eliminações</span><b>${fmt(t.kills||0)}</b></div><div><span>Disparos</span><b>${fmt(t.shots||0)}</b></div></div>
+    <div class="priority-row"><label for="prioritySelect">Prioridade de alvo</label><select id="prioritySelect"><option value="first">Primeiro</option><option value="last">Último</option><option value="strong">Mais forte</option><option value="weak">Mais fraco</option><option value="near">Mais próximo</option></select></div>
+    ${['A','B','C'].map(path=>upgradeHtml(t,path)).join('')}
+    <div class="ability-copy"><b>${t.ability.name}</b><br>${t.ability.description}</div>
+    <button class="ability-btn" id="abilityBtn" ${t.level<4||now<t.abilityReady?'disabled':''}>${abilityLabel}</button><button class="sell-btn" id="sellBtn">Vender por ◇ ${sellValue(t)}</button>`;
+  document.getElementById('prioritySelect').value=t.priority;
+  document.getElementById('prioritySelect').onchange=e=>{t.priority=e.target.value;showBattleHint(`Prioridade alterada para: ${e.target.selectedOptions[0].text}.`)};
+  document.querySelectorAll('[data-upgrade]').forEach(b=>b.onclick=()=>buyUpgrade(b.dataset.upgrade));
+  document.getElementById('abilityBtn').onclick=()=>{
+    if(useAbility(t,state)){
+      sounds.upgrade();
+      showBattleHint(`${t.ability.name} ativada.`);
+      renderTowerPanel();
+    }
+  };
+  document.getElementById('sellBtn').onclick=()=>sellTower(t);
+}
+
+function upgradeHtml(t,path){
+  const lvl=t.upgrades[path];
+  const u=getUpgrade(path,lvl);
+  const dots=Array.from({length:5},(_,i)=>`<i class="${i<lvl?'active':''}"></i>`).join('');
+  return `<div class="upgrade-path"><div class="up-head"><div><b>${pathName(path)}</b><br><small>Nível ${lvl}/5${u?` · ${u.name}`:' · Máximo'}</small></div>${u?`<b>◇ ${u.cost}</b>`:''}</div><div class="upgrade-levels" aria-label="Nível ${lvl} de 5">${dots}</div>${u?`<button data-upgrade="${path}" ${state.money<u.cost?'disabled':''}>Comprar upgrade</button>`:'<button disabled>Máximo</button>'}</div>`;
+}
+
+function buyUpgrade(path){
+  const t=state.selectedTower;
+  const u=getUpgrade(path,t.upgrades[path]);
+  if(!u||state.money<u.cost)return;
+  state.money-=u.cost;
+  state.runSpent+=u.cost;
+  save.stats.moneySpent+=u.cost;
+  t.spent+=u.cost;
+  u.apply(t);
+  t.upgrades[path]++;
+  t.level=1+t.upgrades.A+t.upgrades.B+t.upgrades.C;
+  sounds.upgrade();
+  spawnBurst(t.x,t.y,t.color,18);
+  showBattleHint(`${u.name} adquirido para ${t.name.split(',')[0]}.`);
+  updateHud(true);
+  if(tutorialStep===3)nextTutorial();
+}
+
+function sellTower(t){
+  const gain=sellValue(t);
+  state.money+=gain;
+  state.towers=state.towers.filter(x=>x!==t);
+  selectTower(null);
+  showBattleHint(`${t.name.split(',')[0]} foi removido. Recursos recuperados: ◇ ${gain}.`);
+  updateHud(true);
+  sounds.button();
+}
+
+function targetFor(t){
+  const now=performance.now();
+  const range=t.range*((t.colossalUntil||0)>now?2:1);
+  const list=state.enemies.filter(e=>!e.dead&&Math.hypot(e.x-t.x,e.y-t.y)<=range&&(t.canSeeInvisible||!e.invisible));
+  if(!list.length)return null;
+  if(t.priority==='last')return list.reduce((a,b)=>a.progress<b.progress?a:b);
+  if(t.priority==='strong')return list.reduce((a,b)=>a.hp>b.hp?a:b);
+  if(t.priority==='weak')return list.reduce((a,b)=>a.hp<b.hp?a:b);
+  if(t.priority==='near')return list.reduce((a,b)=>Math.hypot(a.x-t.x,a.y-t.y)<Math.hypot(b.x-t.x,b.y-t.y)?a:b);
+  return list.reduce((a,b)=>a.progress>b.progress?a:b);
+}
+
+function towerUpdate(t,dt){
+  const now=performance.now();
+  t.cooldown-=dt;
+  const speedBuff=(t.overchargeUntil||0)>now ? .48 : 1;
+  const songBuff=(t.songUntil||0)>now ? .75 : 1;
+  const colossal=(t.colossalUntil||0)>now?2:1;
+  if(t.cooldown<=0){
+    const target=targetFor(t);
+    t.currentTarget=target;
+    if(target){
+      const shots=t.multishot||1;
+      for(let i=0;i<shots;i++)state.projectiles.push(createProjectile({...t,damage:t.damage*colossal,_towerRef:t},target,(i-(shots-1)/2)*.06));
+      t.shots+=shots;
+      t.cooldown=t.attackSpeed*speedBuff*songBuff;
+      sounds.shoot();
+    }
+  }
+}
+
+function startWave(){
+  if(state.waveActive||state.gameOver)return;
+  if(state.maxWave!==Infinity&&state.wave>=state.maxWave)return;
+  state.wave++;
+  state.waveActive=true;
+  state.spawning=true;
+  spawnQueue=[];
+  for(const group of getWave(state.wave))for(let i=0;i<group.count;i++)spawnQueue.push({type:group.type,delay:group.interval});
+  state.waveTotal=spawnQueue.length;
+  state.waveSpawned=0;
+  spawnTimer=0;
+  document.getElementById('startWaveBtn').disabled=true;
+  showBattleHint(`Rodada ${state.wave} iniciada. Prepare-se para ${state.waveTotal} hostis.`);
+  updateHud(true);
+  if(tutorialStep===2)nextTutorial();
+}
+
+function spawnUpdate(dt){
+  if(!state.spawning)return;
+  spawnTimer-=dt;
+  if(spawnTimer<=0&&spawnQueue.length){
+    const next=spawnQueue.shift();
+    state.enemies.push(createEnemy(next.type,state.wave,state.path,diff));
+    state.waveSpawned++;
+    spawnTimer=next.delay;
+  }
+  if(!spawnQueue.length)state.spawning=false;
+}
+
+function finishWave(){
+  state.waveActive=false;
+  const reward=waveBonus(state.wave);
+  state.money+=reward;
+  state.runEarned+=reward;
+  document.getElementById('startWaveBtn').disabled=false;
+  toast(`Rodada ${state.wave} concluída · +◇ ${reward}`);
+  showBattleHint(`Setor limpo. Bônus de rodada: ◇ ${reward}.`);
+  if(state.maxWave!==Infinity&&state.wave>=state.maxWave){
+    finishGame(true);
+    return;
+  }
+  if(state.auto)setTimeout(()=>!state.gameOver&&startWave(),450);
+}
+
+function finishGame(win){
+  if(state.gameOver)return;
+  state.gameOver=true;
+  state.paused=true;
+  save.stats.gamesPlayed++;
+  save.stats.bestWave=Math.max(save.stats.bestWave,state.wave);
+  save.stats.kills+=state.kills;
+  save.stats.abilitiesUsed+=state.runAbilities;
+  save.stats.bossesDefeated+=state.bossKills;
+  save.stats.damageDealt+=(Math.round(state.runDamage)||0);
+  save.stats.totalWaves+=state.wave;
+  save.stats.bestKills=Math.max(save.stats.bestKills||0,state.kills);
+  if(win){
+    save.stats.wins++;
+    if(state.lives===state.initialLives)save.stats.perfectWins++;
+  }else save.stats.losses++;
+  const xp=Math.floor((state.wave*7+state.kills*.45)*(win?1.25:1));
+  const coins=Math.floor((state.wave*4+state.kills*.12)*diff.reward);
+  save.stats.coinsEarned+=coins;
+  let itemDrop=null;
+  const missing=ITEMS.filter(i=>!save.equipment.includes(i.id));
+  if(state.wave>=20&&missing.length&&Math.random()<.35){
+    itemDrop=missing[Math.floor(Math.random()*missing.length)];
+    save.equipment.push(itemDrop.id);
+  }
+  const beforeAchievements=new Set(save.achievements);
+  const elapsed=Math.max(1,Math.floor((performance.now()-state.startTime)/1000));
+  save.stats.timePlayed+=elapsed;
+  const mvp=[...state.towers].sort((a,b)=>(b.damageDealt||0)-(a.damageDealt||0))[0];
+  const entry={date:new Date().toISOString(),win,map:map.id,mapName:map.name,difficulty:difficultyKey,mode,wave:state.wave,kills:state.kills,damage:Math.round(state.runDamage),duration:elapsed,lives:state.lives,mvp:mvp?.id||null};
+  save.battleHistory=[entry,...(Array.isArray(save.battleHistory)?save.battleHistory:[])].slice(0,12);
+  grantProgress(save,xp,coins);
+  const unlockedNow=save.achievements.filter(id=>!beforeAchievements.has(id));
+  const minutes=Math.floor(elapsed/60);
+  const seconds=String(elapsed%60).padStart(2,'0');
+  const overlay=document.getElementById('resultOverlay');
+  document.getElementById('resultIcon').textContent=win?'✦':'◇';
+  document.getElementById('resultIcon').style.color=win?'var(--gold)':'var(--red)';
+  document.getElementById('resultTitle').textContent=win?'Vitória':'Bastião rompido';
+  document.getElementById('resultSummary').textContent=(win?'A rota do Véu foi estabilizada.':'A expedição terminou, mas o progresso permanente foi preservado.')+(itemDrop?` Novo item encontrado: ${itemDrop.name}.`:'');
+  document.getElementById('resultHighlight').innerHTML=mvp?`Destaque da expedição: <b>${mvp.name}</b> com <b>${fmt(Math.floor(mvp.damageDealt||0))} de dano</b>.`:`Destaque: continue expandindo seu esquadrão de guardiões.`;
+  document.getElementById('resultStats').innerHTML=`<div><span>Rodada</span><b>${state.wave}</b></div><div><span>Eliminações</span><b>${fmt(state.kills)}</b></div><div><span>Dano</span><b>${fmt(Math.round(state.runDamage))}</b></div><div><span>Vidas</span><b>${state.lives}</b></div><div><span>XP</span><b>+${fmt(xp)}</b></div><div><span>Moedas</span><b>+${fmt(coins)}</b></div><div><span>Tempo</span><b>${minutes}:${seconds}</b></div><div><span>Conquistas</span><b>+${unlockedNow.length}</b></div>`;
+  overlay.classList.remove('hidden');
+  updateHud(true);
+  win?sounds.win():sounds.lose();
+}
+
+function cleanupAndRewards(){
+  const children=[];
+  for(const e of state.enemies){
+    if(e.dead&&!e.counted){
+      e.counted=true;
+      state.kills++;
+      state.money+=e.reward;
+      state.runEarned+=e.reward;
+      if(e.boss)state.bossKills++;
+      spawnBurst(e.x,e.y,e.color,e.boss?28:8);
+      const layer={titan:['champion','champion'],champion:['brute','brute'],golem:['swarm','swarm']}[e.type]||[];
+      for(const type of layer){
+        const child=createEnemy(type,state.wave,state.path,diff);
+        child.distance=e.distance;
+        child.progress=e.progress;
+        child.x=e.x;
+        child.y=e.y;
+        children.push(child);
+      }
+    }
+    if(e.escaped&&!e.escapeCounted){
+      e.escapeCounted=true;
+      state.runEscaped++;
+    }
+  }
+  state.enemies=state.enemies.filter(e=>!e.dead&&!e.escaped);
+  state.enemies.push(...children);
+}
+
+function spawnBurst(x,y,color,count){
+  if(!settings.particles)return;
+  const max=settings.quality==='low'?Math.ceil(count*.35):settings.quality==='medium'?Math.ceil(count*.65):count;
+  for(let i=0;i<max;i++){
+    const life=.25+Math.random()*.45;
+    state.particles.push({x,y,vx:(Math.random()-.5)*180,vy:(Math.random()-.5)*180,size:2+Math.random()*4,color,life,maxLife:life});
+  }
+}
+
+function particlesUpdate(dt){
+  for(const p of state.particles){
+    p.x+=p.vx*dt;
+    p.y+=p.vy*dt;
+    p.vx*=.96;
+    p.vy*=.96;
+    p.life-=dt;
+  }
+  state.particles=state.particles.filter(p=>p.life>0);
+}
+
+function allyUpdate(dt){
+  if(!save.equippedAlly||!state.enemies.length)return;
+  allyTimer-=dt;
+  if(allyTimer>0)return;
+  const target=[...state.enemies].filter(e=>!e.dead).sort((a,b)=>b.progress-a.progress)[0];
+  if(!target)return;
+  let dealt=0;
+  if(save.equippedAlly==='drake'){
+    dealt=damageEnemy(target,10+state.wave*.35);
+    allyTimer=1.8;
+  }else if(save.equippedAlly==='spirit'){
+    dealt=damageEnemy(target,5+state.wave*.18);
+    applyStatus(target,{type:'slow',amount:.35,duration:2});
+    allyTimer=2.4;
+  }else if(save.equippedAlly==='scout'){
+    dealt=damageEnemy(target,8+state.wave*.28);
+    allyTimer=1.25;
+  }else allyTimer=2.5;
+  if(dealt)recordDamage(null,dealt,target);
+  if(save.equippedAlly!=='mender'&&save.equippedAlly!=='bot')spawnBurst(target.x,target.y,'#d9f4ff',5);
+}
+
+function recordDamage(tower,dealt,enemy){
+  if(!dealt||dealt<=0)return;
+  const now=performance.now();
+  state.runDamage+=dealt;
+  state.damageEvents.push({time:now,value:dealt});
+  if(tower){
+    tower.damageDealt=(tower.damageDealt||0)+dealt;
+    if(enemy?.dead)tower.kills=(tower.kills||0)+1;
+  }
+}
+
+function updateDps(now){
+  const cutoff=now-2000;
+  state.damageEvents=state.damageEvents.filter(event=>event.time>=cutoff);
+  state.liveDps=state.damageEvents.reduce((total,event)=>total+event.value,0)/2;
+}
+
+function update(dt){
+  spawnUpdate(dt);
+  const bossAura=state.enemies.some(e=>e.boss&&!e.dead)?1.12:1;
+  for(const e of state.enemies){
+    updateEnemy(e,dt*(e.boss?1:bossAura),state.path,performance.now());
+    if(e.distance>=state.path.total&&!e.dead){
+      e.escaped=true;
+      state.lives-=e.lives;
+      if(state.lives<=0){
+        state.lives=0;
+        finishGame(false);
+      }
+    }
+  }
+  for(const t of state.towers)towerUpdate(t,dt);
+  allyUpdate(dt);
+  for(const p of state.projectiles)updateProjectile(p,dt,state.enemies,(enemy,dealt,projectile)=>{
+    sounds.hit();
+    recordDamage(projectile.owner||projectile._towerRef||null,dealt,enemy);
+    if(settings.damageNumbers){
+      const life=.65;
+      state.damageNumbers.push({x:enemy.x,y:enemy.y-12,value:dealt,life,maxLife:life,color:'#ffffff'});
+    }
+  });
+  state.projectiles=state.projectiles.filter(p=>!p.dead);
+  cleanupAndRewards();
+  particlesUpdate(dt);
+  for(const d of state.damageNumbers){
+    d.y-=24*dt;
+    d.life-=dt;
+  }
+  state.damageNumbers=state.damageNumbers.filter(d=>d.life>0);
+  updateDps(performance.now());
+  if(state.waveActive&&!state.spawning&&!state.enemies.length)finishWave();
+  updateHud();
+}
+
+function updateBattleIntel(){
+  const alive=state.enemies.filter(e=>!e.dead).length;
+  const pending=spawnQueue.length+alive;
+  const completed=Math.max(0,state.waveTotal-pending);
+  const ratio=state.waveTotal?Math.min(100,completed/state.waveTotal*100):0;
+  document.getElementById('enemiesAlive').textContent=fmt(alive);
+  document.getElementById('enemiesRemaining').textContent=fmt(pending);
+  document.getElementById('waveProgressFill').style.width=`${ratio}%`;
+  document.getElementById('waveThreatText').textContent=state.waveActive?`${Math.round(ratio)}% neutralizada`:state.wave?`Rodada ${state.wave} concluída`:'Aguardando';
+  document.getElementById('killsHud').textContent=fmt(state.kills);
+  document.getElementById('dpsHud').textContent=fmt(Math.round(state.liveDps));
+}
+
+function updateHud(force=false){
+  document.getElementById('livesHud').textContent=fmt(state.lives);
+  document.getElementById('moneyHud').textContent=fmt(state.money);
+  document.getElementById('waveHud').textContent=state.wave;
+  updateBattleIntel();
+  if(state.selectedTower&&(force||performance.now()-panelLastRendered>280))renderTowerPanel();
+}
+
+function showBattleHint(text){
+  const hint=document.getElementById('battleHint');
+  if(!hint)return;
+  hint.textContent=text;
+  hint.classList.remove('hidden-hint');
+}
+
+function loop(now){
+  const raw=Math.min(.05,(now-last)/1000);
+  last=now;
+  if(!state.paused&&!state.gameOver)update(raw*state.speed);
+  renderGame(ctx,state);
+  requestAnimationFrame(loop);
+}
+
+function showTutorial(){
+  const box=document.getElementById('tutorialBox');
+  box.classList.remove('hidden');
+  tutorialStep=0;
+  setTutorialText();
+}
+function setTutorialText(){
+  const texts=['Escolha um guardião na barra inferior. Cada unidade possui custo, alcance e função próprios.','Posicione o guardião fora da estrada. O círculo fica verde em uma posição válida.','Inicie a primeira rodada pelo botão no topo.','Selecione um guardião colocado e compre um upgrade real de um dos três caminhos.','No painel do guardião, altere a prioridade de alvo entre Primeiro, Último, Mais forte, Mais fraco e Mais próximo.','Ao alcançar nível 4 durante a partida, use a habilidade especial do guardião quando estiver pronta.'];
+  document.getElementById('tutorialText').textContent=texts[tutorialStep]||'';
+}
+function nextTutorial(){
+  tutorialStep++;
+  if(tutorialStep>=6){
+    endTutorial();
+    return;
+  }
+  setTutorialText();
+}
+function endTutorial(){
+  save.tutorialDone=true;
+  saveGame(save);
+  document.getElementById('tutorialBox').classList.add('hidden');
+}
+
 init();
